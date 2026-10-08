@@ -96,6 +96,7 @@ type TokenRow = {
   volume_24h: number | null;
   grad_liquidity_usd: number | null;
   grad_creator_balance: string | null;
+  grad_snapshot_at: number | null;
   creator_sold: number;
   creator_sold_block: number | null;
   updated_at: number;
@@ -136,6 +137,7 @@ export type TokenRecord = {
   volume24h: number | null;
   gradLiquidityUsd: number | null;
   gradCreatorBalance: string | null;
+  gradSnapshotAt: number | null;
   creatorSold: boolean;
   creatorSoldBlock: number | null;
   updatedAt: number;
@@ -200,6 +202,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   volume_24h REAL,
   grad_liquidity_usd REAL,
   grad_creator_balance TEXT,
+  grad_snapshot_at INTEGER,
   creator_sold INTEGER NOT NULL DEFAULT 0,
   creator_sold_block INTEGER,
   updated_at INTEGER NOT NULL DEFAULT 0
@@ -264,6 +267,17 @@ export class Store {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     if (filename !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.ensureColumn("tokens", "grad_snapshot_at", "INTEGER");
+    this.db.exec(
+      `UPDATE tokens SET grad_snapshot_at = graduated_at
+       WHERE grad_liquidity_usd IS NOT NULL AND grad_snapshot_at IS NULL AND graduated_at > 0`,
+    );
+  }
+
+  private ensureColumn(table: string, column: string, definition: string) {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (columns.some((item) => item.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   close(): Promise<void> {
@@ -388,11 +402,11 @@ export class Store {
             progress = 1,
             pool = COALESCE(?, pool),
             graduation_block = COALESCE(graduation_block, ?),
-            graduated_at = COALESCE(graduated_at, ?),
+            graduated_at = COALESCE(NULLIF(graduated_at, 0), ?),
             updated_at = ?
           WHERE token = ?`,
         )
-        .run(input.pool ? lower(input.pool) : null, input.block, input.at, Date.now(), lower(token));
+        .run(input.pool ? lower(input.pool) : null, input.block, input.at > 0 ? input.at : null, Date.now(), lower(token));
       return !was;
     });
   }
@@ -411,12 +425,12 @@ export class Store {
             quote_reserve = COALESCE(?, quote_reserve),
             status = COALESCE(?, status),
             pool = COALESCE(?, pool),
-            tax_rate = COALESCE(?, tax_rate),
-            buy_tax_rate = COALESCE(?, buy_tax_rate),
-            sell_tax_rate = COALESCE(?, sell_tax_rate),
+            tax_rate = CASE WHEN COALESCE(?, 0) > 0 THEN ? ELSE tax_rate END,
+            buy_tax_rate = CASE WHEN COALESCE(?, 0) > 0 THEN ? ELSE buy_tax_rate END,
+            sell_tax_rate = CASE WHEN COALESCE(?, 0) > 0 THEN ? ELSE sell_tax_rate END,
             graduated = CASE WHEN ? = 1 THEN 1 ELSE graduated END,
             graduation_block = COALESCE(graduation_block, ?),
-            graduated_at = COALESCE(graduated_at, ?),
+            graduated_at = COALESCE(NULLIF(graduated_at, 0), ?),
             updated_at = ?
           WHERE token = ?`,
         )
@@ -428,11 +442,14 @@ export class Store {
           patch.status ?? null,
           patch.pool ? lower(patch.pool) : null,
           patch.taxRate ?? null,
+          patch.taxRate ?? null,
           patch.buyTaxRate ?? null,
+          patch.buyTaxRate ?? null,
+          patch.sellTaxRate ?? null,
           patch.sellTaxRate ?? null,
           patch.graduated ? 1 : 0,
           patch.graduated ? (patch.graduationBlock ?? null) : null,
-          patch.graduated ? (patch.graduatedAt ?? null) : null,
+          patch.graduated && patch.graduatedAt ? patch.graduatedAt : null,
           Date.now(),
           lower(token),
         );
@@ -505,18 +522,20 @@ export class Store {
           `SELECT * FROM tokens
            WHERE graduated = 1 AND graduated_at IS NOT NULL AND graduated_at > 0
              AND (
-               (graduated_at + ? <= ? AND NOT EXISTS (
-                 SELECT 1 FROM checkpoints c WHERE c.token = tokens.token AND c.window = '24h'
-               ))
+               (graduated_at + ? <= ?
+                 AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.token = tokens.token AND c.window = '24h')
+                 AND (grad_snapshot_at IS NULL OR grad_snapshot_at < graduated_at + ?)
+                 AND (grad_snapshot_at IS NOT NULL OR graduated_at + ? > ?))
                OR
-               (graduated_at + ? <= ? AND NOT EXISTS (
-                 SELECT 1 FROM checkpoints c WHERE c.token = tokens.token AND c.window = '7d'
-               ))
+               (graduated_at + ? <= ?
+                 AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.token = tokens.token AND c.window = '7d')
+                 AND (grad_snapshot_at IS NULL OR grad_snapshot_at < graduated_at + ?)
+                 AND (grad_snapshot_at IS NOT NULL OR graduated_at + ? > ?))
              )
            ORDER BY graduated_at ASC
            LIMIT 50`,
         )
-        .all(day, now, week, now) as TokenRow[];
+        .all(day, now, day, day + week, now, week, now, week, day + week, now) as TokenRow[];
       return rows.map(toRecord);
     });
   }
@@ -552,13 +571,21 @@ export class Store {
     });
   }
 
-  saveSnapshot(token: string, input: { liquidityUsd: number | null; creatorBalance: string | null; pool?: string | null }): Promise<void> {
+  saveSnapshot(
+    token: string,
+    input: { liquidityUsd: number | null; creatorBalance: string | null; pool?: string | null; at: number },
+  ): Promise<void> {
     return this.enqueue(() => {
       this.db
         .prepare(
           `UPDATE tokens SET
             grad_liquidity_usd = COALESCE(grad_liquidity_usd, ?),
             grad_creator_balance = COALESCE(grad_creator_balance, ?),
+            grad_snapshot_at = CASE
+              WHEN grad_snapshot_at IS NOT NULL AND grad_snapshot_at > 0 THEN grad_snapshot_at
+              WHEN ? IS NOT NULL AND ? > 0 THEN ?
+              ELSE grad_snapshot_at
+            END,
             pool = COALESCE(?, pool),
             liquidity_usd = COALESCE(?, liquidity_usd),
             updated_at = ?
@@ -567,6 +594,9 @@ export class Store {
         .run(
           input.liquidityUsd,
           input.creatorBalance,
+          input.liquidityUsd,
+          input.at,
+          input.at,
           input.pool ? lower(input.pool) : null,
           input.liquidityUsd,
           Date.now(),
@@ -731,7 +761,13 @@ export class Store {
               graduated_at = NULL,
               grad_liquidity_usd = NULL,
               grad_creator_balance = NULL,
-              pool = CASE WHEN venue = 'flap' THEN NULL ELSE pool END
+              grad_snapshot_at = NULL,
+              pool = NULL,
+              progress = CASE
+                WHEN venue = 'pons' AND CAST(IFNULL(graduation_threshold, '0') AS REAL) > 0
+                  THEN MIN(1.0, CAST(IFNULL(real_quote_reserve, '0') AS REAL) / CAST(graduation_threshold AS REAL))
+                ELSE 0
+              END
             WHERE graduation_block >= ?`,
           )
           .run(block);
@@ -882,6 +918,9 @@ export class Store {
       sellTaxRate: row.sell_tax_rate,
       safetyBreakdown: readJson(row.safety_json),
       holders: readJson<HolderView[]>(row.holders_json) ?? [],
+      buyers: (this.db.prepare("SELECT buyer FROM buyers WHERE token = ? ORDER BY block, buyer").all(row.token) as { buyer: string }[]).map(
+        (item) => item.buyer,
+      ),
       liquidityUsd: row.liquidity_usd,
       priceUsd: row.price_usd,
       volume24h: row.volume_24h,
@@ -958,6 +997,7 @@ function toRecord(row: TokenRow): TokenRecord {
     volume24h: row.volume_24h,
     gradLiquidityUsd: row.grad_liquidity_usd,
     gradCreatorBalance: row.grad_creator_balance,
+    gradSnapshotAt: row.grad_snapshot_at,
     creatorSold: row.creator_sold === 1,
     creatorSoldBlock: row.creator_sold_block,
     updatedAt: row.updated_at,

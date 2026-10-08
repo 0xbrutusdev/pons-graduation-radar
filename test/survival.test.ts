@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorDumped, liquidityStayed, windowSurvived } from "../src/survival.js";
+import { baselineCovers, creatorDumped, DAY_SECONDS, liquidityStayed, windowSurvived } from "../src/survival.js";
 
 test("liquidity stayed when the pair is still at least half the first reading", () => {
   assert.equal(liquidityStayed(50, 100), true);
@@ -19,4 +19,11 @@ test("a window survives only when liquidity stayed and the creator did not sell"
   assert.equal(windowSurvived(true, false), true);
   assert.equal(windowSurvived(true, true), false);
   assert.equal(windowSurvived(false, false), false);
+});
+
+test("a survival window needs a snapshot taken before that window", () => {
+  const graduatedAt = 1_700_000_000;
+  assert.equal(baselineCovers(graduatedAt + 60, graduatedAt, DAY_SECONDS), true);
+  assert.equal(baselineCovers(graduatedAt + DAY_SECONDS, graduatedAt, DAY_SECONDS), false);
+  assert.equal(baselineCovers(null, graduatedAt, DAY_SECONDS), false);
 });

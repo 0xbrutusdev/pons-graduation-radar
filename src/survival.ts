@@ -21,3 +21,9 @@ export function creatorDumped(current: bigint, snapshot: bigint): boolean {
 export function windowSurvived(stayed: boolean, sold: boolean): boolean {
   return stayed && !sold;
 }
+
+/** The first liquidity reading has to predate the window, or the later check is comparing a quote to itself. */
+export function baselineCovers(snapshotAt: number | null, graduatedAt: number, windowSeconds: number): boolean {
+  if (snapshotAt == null || snapshotAt <= 0 || graduatedAt <= 0) return false;
+  return snapshotAt < graduatedAt + windowSeconds;
+}

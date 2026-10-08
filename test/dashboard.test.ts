@@ -87,6 +87,7 @@ test("opening a token renders progress, holder concentration, and creator surviv
     row.click();
     await waitFor(() => (document.querySelector("#progress-line")?.textContent ?? "").includes("72.0%"));
     assert.match(document.querySelector("#progress-line")?.textContent ?? "", /progress 72\.0%/);
+    assert.match(document.querySelector("#quote-line")?.textContent ?? "", /real quote 720 \/ 1000/);
     assert.match(document.querySelector("#holder-panel")?.textContent ?? "", /top 10 48\.0%/);
     assert.match(document.querySelector("#survival-line")?.textContent ?? "", /24h survival 0%/);
     assert.match(document.querySelector("#survival-line")?.textContent ?? "", /graduation 50%/);

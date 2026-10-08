@@ -40,3 +40,10 @@ test("top 10 share uses circulating supply after exclusions", () => {
   assert.equal(result.top[0]?.account, whale);
   assert.equal(result.top[0]?.share, 0.5);
 });
+
+test("unknown circulating supply does not invent a top-10 share", () => {
+  const whale = "0x4444444444444444444444444444444444444444";
+  const result = concentration([{ account: whale, balance: 100n }], [], 0n);
+  assert.equal(result.top10Share, null);
+  assert.equal(result.top[0]?.account, whale);
+});

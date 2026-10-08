@@ -230,6 +230,14 @@
       ]);
     }
 
+    function quoteLine(detail) {
+      if (detail.venue === "pons" && detail.realQuoteReserve && detail.graduationThreshold) {
+        return "real quote " + detail.realQuoteReserve + " / " + detail.graduationThreshold;
+      }
+      if (detail.quoteReserve) return "quote reserve " + detail.quoteReserve;
+      return "quote not read yet";
+    }
+
     function renderDetail(detail) {
       document.querySelector("#empty-detail").hidden = true;
       panels.forEach((id) => { document.querySelector("#" + id).hidden = false; });
@@ -243,6 +251,7 @@
           el("span", { className: "venue " + detail.venue, text: detail.venue }),
         ]),
         el("p", { id: "progress-line", text: "progress " + pct(detail.progress) + (detail.graduated ? " · graduated" : " · on the curve") }),
+        el("p", { id: "quote-line", className: "muted", text: quoteLine(detail) }),
         el("div", { className: "track" }, [fill]),
         el("p", { className: "muted", text: detail.uniqueBuyers + " unique buyers · " + (detail.curve || detail.pool || detail.token) }),
         el("p", {}, [

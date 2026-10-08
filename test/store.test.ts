@@ -61,6 +61,35 @@ test("the board sorts by progress, and clean first keeps curves at 70% or more",
   await store.close();
 });
 
+test("a zero tax read does not erase a tax already seen, and a missed timestamp can be filled later", async () => {
+  const store = new Store(":memory:");
+  const address = "0x1111111111111111111111111111111111111111";
+  await store.insertToken({ ...token(address), venue: "flap", curve: null });
+  await store.noteTax(address, { taxRate: 100, buyTaxRate: 80, sellTaxRate: 40 });
+  await store.noteProgress(address, 0.2, { taxRate: 0, buyTaxRate: 0, sellTaxRate: 0 });
+  await store.noteGraduated(address, { pool: "0x9999999999999999999999999999999999999999", block: 12, at: 0 });
+  await store.noteGraduated(address, { pool: null, block: 12, at: 1_700_000_100 });
+  const row = await store.get(address);
+  assert.equal(row?.taxRate, 100);
+  assert.equal(row?.buyTaxRate, 80);
+  assert.equal(row?.sellTaxRate, 40);
+  assert.equal(row?.graduatedAt, 1_700_000_100);
+  await store.close();
+});
+
+test("a reorg restores curve progress from the real quote reserve", async () => {
+  const store = new Store(":memory:");
+  const address = "0x1111111111111111111111111111111111111111";
+  await store.insertToken({ ...token(address), launchBlock: 10 });
+  await store.noteProgress(address, 0.4, { realQuoteReserve: "400", graduationThreshold: "1000" });
+  await store.noteGraduated(address, { pool: null, block: 30, at: 1_700_000_100 });
+  await store.deleteFromBlock(30);
+  const row = await store.get(address);
+  assert.equal(row?.graduated, false);
+  assert.ok(Math.abs((row?.progress ?? 0) - 0.4) < 1e-9);
+  await store.close();
+});
+
 test("a reorg drops rows from the orphaned block and forgets buyers after it", async () => {
   const store = new Store(":memory:");
   const early = "0x1111111111111111111111111111111111111111";

@@ -1,3 +1,8 @@
+/** Next block of curve buys to read for one token. A caught-up curve stays on its own cursor. */
+export function nextTradeBlock(launchBlock: number, buyScanned: number): number {
+  return Math.max(0, launchBlock, buyScanned + 1);
+}
+
 /** Walk a block span, splitting a range whose log query is too wide. */
 export async function mapRange<T>(
   from: bigint,

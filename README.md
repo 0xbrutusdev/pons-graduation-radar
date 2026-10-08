@@ -30,7 +30,7 @@ Pons factory `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e`:
 Flap portal `0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09`. `TokenCreated` and `LaunchedToDEX` are accepted only from this proxy, because other launchpads emit the same names.
 
 - Progress is `getTokenV7(token).progress / 1e18`. If that call reverts, the indexer tries `getTokenV8Safe`. Status `DEX` (4) means graduated.
-- `TokenBought` and `TokenSold` supply unique buyers and creator sells. Buys are kept only for tokens this portal created.
+- `TokenBought`, `TokenSold`, and `FlapTokenProgressChanged` are read from this proxy only. Another launchpad's copy of those names cannot fill a row.
 - On this chain the graduated pool is a Uniswap v2 pair.
 
 Holder concentration excludes the curve or portal, the pool or Pons locker `0x267444d099b10fb5ed7c3cc7b7c767adca574952`, and the zero and dead addresses.
@@ -46,7 +46,7 @@ The score starts at 100. Weights live in the environment.
 
 The board sorts by progress, then unique buyers, then safety. Clean first keeps tokens already at 70% or more and sorts those by safety.
 
-After graduation the indexer snapshots DexScreener liquidity and the creator's token balance, then checks again at 24 hours and 7 days. Liquidity stayed when the pair still exists and USD liquidity is at least half of that first reading. The creator sold when their balance fell by 10% or more, or a curve sell, portal sell, or transfer into the pool came from them. A window is survived only when liquidity stayed and the creator did not sell.
+After graduation the indexer snapshots DexScreener liquidity and the creator's token balance, then checks again at 24 hours and 7 days. That check runs only when the snapshot was taken before the window. Liquidity stayed when the pair still exists and USD liquidity is at least half of that first reading. The creator sold when their balance fell by 10% or more, or a curve sell, portal sell, or transfer into the pool came from them. A window is survived only when liquidity stayed and the creator did not sell. A missing quote is retried instead of closing the window.
 
 ## API
 

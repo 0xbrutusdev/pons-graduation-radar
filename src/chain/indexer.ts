@@ -30,12 +30,12 @@ import {
 import { dispatchAlert, dueMilestones, formatAlert } from "../alerts.js";
 import type { Config } from "../config.js";
 import { blockscoutHolders, concentration, excludedHolders } from "./holders.js";
-import { mapRange } from "./logs.js";
+import { mapRange, nextTradeBlock } from "./logs.js";
 import { poolQuote } from "./market.js";
 import { robinhoodChain } from "./network.js";
 import { flapProgress, ponsProgress } from "../progress.js";
 import type { Store, TokenRecord } from "../store.js";
-import { creatorDumped, DAY_SECONDS, liquidityStayed, WEEK_SECONDS, windowSurvived } from "../survival.js";
+import { baselineCovers, creatorDumped, DAY_SECONDS, liquidityStayed, WEEK_SECONDS, windowSurvived } from "../survival.js";
 
 const factory = getAddress(PONS_FACTORY);
 const portal = getAddress(FLAP_PORTAL);
@@ -202,7 +202,15 @@ async function applyLog(client: PublicClient, store: Store, log: WatchedLog, bat
   const block = log.blockNumber == null ? null : Number(log.blockNumber);
   const tx = log.transactionHash ?? "0x";
   const emitter = lower(log.address ?? "");
-  if ((name === "TokenCreated" || name === "LaunchedToDEX") && emitter !== lower(portal)) return;
+  const flapLog =
+    name === "TokenCreated" ||
+    name === "LaunchedToDEX" ||
+    name === "FlapTokenProgressChanged" ||
+    name === "TokenBought" ||
+    name === "TokenSold" ||
+    name === "FlapTokenTaxSet" ||
+    name === "FlapTokenAsymmetricTaxSet";
+  if (flapLog && emitter !== lower(portal)) return;
 
   if (name === "TokenLaunched") {
     const token = textArg(args, "token");
@@ -388,44 +396,38 @@ export async function startIndexer(store: Store, config: Config): Promise<void> 
 
   const width = BigInt(config.logChunkBlocks);
 
-  const scanPonsTrades = async (from: bigint, to: bigint) => {
+  const scanPonsTrades = async (to: bigint) => {
     const curves = (await store.listPonsCurves()).filter(
       (row) => row.curve && row.launchBlock <= Number(to) && row.buyScanned < Number(to),
     );
-    if (curves.length === 0) return;
-    const earliest = curves.reduce((min, row) => Math.min(min, row.buyScanned + 1), Number(from));
-    const start = BigInt(Math.max(0, Math.min(Number(from), earliest)));
-    for (const batch of chunks(curves, 20)) {
-      const addresses = batch.flatMap((row) => (row.curve ? [getAddress(row.curve)] : []));
-      const logs = await mapRange(start, to, width, (rangeFrom, rangeTo) =>
-        client.getLogs({
-          address: addresses,
-          events: [curveBuyEvent, curveSellEvent],
-          fromBlock: rangeFrom,
-          toBlock: rangeTo,
-        }),
-      );
-      const dirty: Batch = { dirty: new Set() };
-      await applyAll(client, store, logs, dirty, enrich);
-      await rescoreDirty(store, config, dirty);
+    const groups = new Map<number, TokenRecord[]>();
+    for (const row of curves) {
+      const start = nextTradeBlock(row.launchBlock, row.buyScanned);
+      const group = groups.get(start) ?? [];
+      group.push(row);
+      groups.set(start, group);
     }
-    await store.markBuysScanned(
-      curves.map((row) => row.token),
-      Number(to),
-    );
-  };
-
-  const scanFlapTrades = async (from: bigint, to: bigint) => {
-    const logs = await mapRange(from, to, width, (rangeFrom, rangeTo) =>
-      client.getLogs({
-        events: [tokenBoughtEvent, tokenSoldEvent, flapProgressEvent, flapTaxEvent, flapAsymmetricTaxEvent],
-        fromBlock: rangeFrom,
-        toBlock: rangeTo,
-      }),
-    );
-    const dirty: Batch = { dirty: new Set() };
-    await applyAll(client, store, logs, dirty, enrich);
-    await rescoreDirty(store, config, dirty);
+    for (const [start, group] of groups) {
+      if (start > Number(to)) continue;
+      for (const batch of chunks(group, 20)) {
+        const addresses = batch.flatMap((row) => (row.curve ? [getAddress(row.curve)] : []));
+        const logs = await mapRange(BigInt(start), to, width, (rangeFrom, rangeTo) =>
+          client.getLogs({
+            address: addresses,
+            events: [curveBuyEvent, curveSellEvent],
+            fromBlock: rangeFrom,
+            toBlock: rangeTo,
+          }),
+        );
+        const dirty: Batch = { dirty: new Set() };
+        await applyAll(client, store, logs, dirty, enrich);
+        await rescoreDirty(store, config, dirty);
+      }
+      await store.markBuysScanned(
+        group.map((row) => row.token),
+        Number(to),
+      );
+    }
   };
 
   const indexRange = async (from: bigint, to: bigint) => {
@@ -457,8 +459,7 @@ export async function startIndexer(store: Store, config: Config): Promise<void> 
     ]);
     const dirty: Batch = { dirty: new Set() };
     await applyAll(client, store, [...factoryLogs, ...portalLogs], dirty, enrich);
-    await scanPonsTrades(from, to);
-    await scanFlapTrades(from, to);
+    await scanPonsTrades(to);
     await rescoreDirty(store, config, dirty);
     await publishAlerts(store, config);
   };
@@ -589,7 +590,7 @@ export async function startIndexer(store: Store, config: Config): Promise<void> 
   const refreshSafety = async () => {
     const now = await chainNow(client);
     const targets = await store.listSafetyTargets(now - WEEK_SECONDS, 40);
-    for (const row of targets) await refreshOne(client, store, config, row);
+    for (const row of targets) await refreshOne(client, store, config, row, now);
     await reviewSurvival(client, store, config, now);
     await publishAlerts(store, config);
   };
@@ -715,70 +716,85 @@ async function pollFlap(client: PublicClient, store: Store, rows: TokenRecord[])
   }
 }
 
-async function refreshOne(client: PublicClient, store: Store, config: Config, row: TokenRecord) {
-  let holders: { account: string; balance: bigint }[] = [];
+async function refreshOne(client: PublicClient, store: Store, config: Config, row: TokenRecord, now: number) {
+  let fetched: { account: string; balance: bigint }[] | null = null;
   try {
-    holders = await blockscoutHolders(row.token);
+    fetched = await blockscoutHolders(row.token);
   } catch (error) {
     console.error("[holders]", row.token, message(error));
   }
-  const excluded = excludedHolders(row);
-  let supply = 0n;
-  try {
-    supply = await client.readContract({
-      address: getAddress(row.token),
-      abi: erc20Abi,
-      functionName: "totalSupply",
-    });
-  } catch (error) {
-    console.error("[holders] supply", row.token, message(error));
-  }
-  const lockedCalls = excluded.filter((account) => !isZeroAddress(account));
-  let locked = 0n;
-  if (lockedCalls.length > 0 && supply > 0n) {
-    const balances = await client.multicall({
-      contracts: lockedCalls.map((account) => ({
+
+  const observation: Parameters<Store["saveObservation"]>[0] = { token: row.token };
+  if (fetched) {
+    const excluded = excludedHolders(row);
+    let supply = 0n;
+    try {
+      supply = await client.readContract({
         address: getAddress(row.token),
         abi: erc20Abi,
-        functionName: "balanceOf" as const,
-        args: [getAddress(account)] as const,
-      })),
-      allowFailure: true,
-    });
-    for (const result of balances) {
-      if (result.status === "success" && typeof result.result === "bigint") locked += result.result;
+        functionName: "totalSupply",
+      });
+    } catch (error) {
+      console.error("[holders] supply", row.token, message(error));
     }
+    const lockedCalls = excluded.filter((account) => !isZeroAddress(account));
+    let locked = 0n;
+    if (lockedCalls.length > 0 && supply > 0n) {
+      const balances = await client.multicall({
+        contracts: lockedCalls.map((account) => ({
+          address: getAddress(row.token),
+          abi: erc20Abi,
+          functionName: "balanceOf" as const,
+          args: [getAddress(account)] as const,
+        })),
+        allowFailure: true,
+      });
+      for (const result of balances) {
+        if (result.status === "success" && typeof result.result === "bigint") locked += result.result;
+      }
+    }
+    const circulating = supply > locked ? supply - locked : 0n;
+    const conc = concentration(fetched, excluded, circulating);
+    if (circulating > 0n) observation.top10Share = conc.top10Share;
+    observation.holders = conc.top;
   }
-  const circulating = supply > locked ? supply - locked : 0n;
-  const conc = concentration(holders, excluded, circulating);
 
-  let holdsLp = false;
   if (row.venue === "flap" && row.pool && !isZeroAddress(row.pool)) {
     const lp = await readBalance(client, row.pool, row.creator);
-    holdsLp = lp != null && lp > 0n;
+    if (lp != null) observation.creatorHoldsLp = lp > 0n;
+  } else if (row.venue !== "flap") {
+    observation.creatorHoldsLp = false;
   }
 
-  let quote = null;
-  if (row.graduated) quote = await poolQuote(row.token);
+  const quote = row.graduated ? await poolQuote(row.token) : null;
   const pool = row.pool ?? quote?.pairAddress ?? null;
-  await store.saveObservation({
-    token: row.token,
-    top10Share: conc.top10Share,
-    holders: conc.top,
-    creatorHoldsLp: row.venue === "flap" ? holdsLp : false,
-    liquidityUsd: quote?.liquidityUsd,
-    priceUsd: quote?.priceUsd,
-    volume24h: quote?.volume24h,
-    pool,
-  });
+  if (quote) {
+    observation.liquidityUsd = quote.liquidityUsd;
+    observation.priceUsd = quote.priceUsd;
+    observation.volume24h = quote.volume24h;
+  }
+  if (pool) observation.pool = pool;
+  await store.saveObservation(observation);
 
-  if (row.graduated && row.gradLiquidityUsd == null) {
+  const born = row.graduatedAt && row.graduatedAt > 0 ? row.graduatedAt : now;
+  if (row.graduated && row.gradLiquidityUsd == null && quote?.liquidityUsd != null) {
     const balance = await readBalance(client, row.token, row.creator);
     await store.saveSnapshot(row.token, {
-      liquidityUsd: quote?.liquidityUsd ?? null,
+      liquidityUsd: quote.liquidityUsd,
       creatorBalance: balance == null ? null : balance.toString(),
       pool,
+      at: now,
     });
+  } else if (row.graduated && row.gradCreatorBalance == null && now < born + DAY_SECONDS) {
+    const balance = await readBalance(client, row.token, row.creator);
+    if (balance != null) {
+      await store.saveSnapshot(row.token, {
+        liquidityUsd: null,
+        creatorBalance: balance.toString(),
+        pool,
+        at: now,
+      });
+    }
   }
   await store.rescore(row.token, config.weights);
 }
@@ -795,9 +811,11 @@ async function reviewSurvival(client: PublicClient, store: Store, config: Config
         liquidityUsd: quote.liquidityUsd,
         creatorBalance: balance == null ? null : balance.toString(),
         pool: row.pool ?? quote.pairAddress,
+        at: now,
       });
       continue;
     }
+    if (quote?.liquidityUsd == null && now < row.graduatedAt + WEEK_SECONDS + DAY_SECONDS) continue;
     const balance = await readBalance(client, row.token, row.creator);
     const pool = row.pool ?? quote?.pairAddress ?? null;
     let transferSold = false;
@@ -825,7 +843,12 @@ async function reviewSurvival(client: PublicClient, store: Store, config: Config
     const detail = await store.getDetail(row.token);
     const windows = (["24h", "7d"] as const).filter((window) => {
       const wait = window === "24h" ? DAY_SECONDS : WEEK_SECONDS;
-      return row.graduatedAt != null && row.graduatedAt + wait <= now && !detail?.checkpoints[window];
+      return (
+        row.graduatedAt != null &&
+        row.graduatedAt + wait <= now &&
+        !detail?.checkpoints[window] &&
+        baselineCovers(row.gradSnapshotAt, row.graduatedAt, wait)
+      );
     });
     for (const window of windows) {
       await store.saveCheckpoint({

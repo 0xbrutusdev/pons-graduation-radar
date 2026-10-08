@@ -37,7 +37,8 @@ export function concentration(
   const skip = new Set(excluded.map(lower));
   const included = holders.filter((holder) => holder.balance > 0n && !skip.has(lower(holder.account)));
   included.sort((left, right) => (left.balance > right.balance ? -1 : left.balance < right.balance ? 1 : 0));
-  const supply = circulating > 0n ? circulating : included.reduce((sum, holder) => sum + holder.balance, 0n);
+  const known = included.reduce((sum, holder) => sum + holder.balance, 0n);
+  const supply = circulating > 0n ? circulating : known;
   if (supply <= 0n) return { top10Share: null, top: [] };
   const top = included.slice(0, 10).map((holder) => ({
     account: lower(holder.account),
@@ -45,7 +46,7 @@ export function concentration(
     share: unitRatio(holder.balance, supply),
   }));
   const summed = top.reduce((sum, holder) => sum + BigInt(holder.balance), 0n);
-  return { top10Share: unitRatio(summed, supply), top };
+  return { top10Share: circulating > 0n ? unitRatio(summed, supply) : null, top };
 }
 
 export async function blockscoutHolders(token: string): Promise<Balance[]> {

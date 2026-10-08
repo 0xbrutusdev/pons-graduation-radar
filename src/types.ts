@@ -59,6 +59,7 @@ export type TokenDetail = RadarRow & {
   sellTaxRate: number;
   safetyBreakdown: SafetyBreakdown | null;
   holders: HolderView[];
+  buyers: string[];
   liquidityUsd: number | null;
   priceUsd: string | null;
   volume24h: number | null;
