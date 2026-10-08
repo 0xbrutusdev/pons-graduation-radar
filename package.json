@@ -1,0 +1,28 @@
+{
+  "name": "graduation-radar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite --import tsx src/index.ts",
+    "dev": "node --experimental-sqlite --import tsx --watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-sqlite --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "dotenv": "^18.0.6",
+    "hono": "^4.13.13",
+    "viem": "^2.57.4"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.20.5",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
