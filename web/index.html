@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Graduation radar</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1218;
+      --panel: #141c26;
+      --line: #263445;
+      --text: #e7eef6;
+      --muted: #8ea0b5;
+      --signal: #f0b429;
+      --safe: #7dcea0;
+      --warn: #e07a5f;
+      --flap: #8eb6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(900px 420px at 100% -10%, #1c3148 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Avenir Next", sans-serif;
+    }
+    header, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: end;
+      padding: 28px 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--signal);
+      font-family: Consolas, ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 40px; font-weight: 560; letter-spacing: -0.03em; }
+    header p.lede { margin: 8px 0 0; max-width: 52ch; color: var(--muted); }
+    .controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-family: Consolas, ui-monospace, monospace;
+      font-size: 12px;
+    }
+    input, select {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+    }
+    input[type="number"] { width: 88px; }
+    .check { display: flex; gap: 8px; align-items: center; padding-bottom: 8px; }
+    main { display: grid; grid-template-columns: 360px 1fr; gap: 22px; padding: 22px 0 48px; }
+    #feed, #detail { min-width: 0; }
+    #feed { display: flex; flex-direction: column; gap: 8px; }
+    .token {
+      text-align: left;
+      width: 100%;
+      background: var(--panel);
+      color: inherit;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .token[aria-current="true"] { border-color: var(--signal); }
+    .token-top, .meta, .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .symbol { font-size: 18px; }
+    .safety { font-family: Consolas, ui-monospace, monospace; font-size: 18px; }
+    .safety.high { color: var(--safe); }
+    .safety.mid { color: var(--signal); }
+    .safety.low { color: var(--warn); }
+    .venue { font-family: Consolas, ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .venue.flap { color: var(--flap); }
+    .venue.pons { color: var(--signal); }
+    .meta, .muted, td, th { color: var(--muted); font-family: Consolas, ui-monospace, monospace; font-size: 12px; }
+    .track { height: 8px; margin-top: 8px; background: #0a1016; border-radius: 99px; overflow: hidden; }
+    .fill { height: 100%; background: var(--signal); }
+    .fill.safe { background: var(--safe); }
+    #detail { display: flex; flex-direction: column; gap: 14px; }
+    .panel {
+      background: rgba(20, 28, 38, 0.94);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    a { color: var(--flap); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .bars { display: grid; gap: 8px; }
+    .bar-row { display: grid; grid-template-columns: 92px 1fr 64px; gap: 8px; align-items: center; font-family: Consolas, ui-monospace, monospace; font-size: 12px; }
+    .holder { display: grid; grid-template-columns: 148px 1fr 64px; gap: 8px; align-items: center; margin: 6px 0; font-family: Consolas, ui-monospace, monospace; font-size: 12px; }
+    .empty { color: var(--muted); margin: 0; }
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; }
+      header { flex-direction: column; align-items: start; }
+      h1 { font-size: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Robinhood Chain · 4663</p>
+      <h1>Graduation radar</h1>
+      <p class="lede">Pons and Flap curves approaching the locked pool, scored by holder concentration and whether the creator's last graduates survived.</p>
+    </div>
+    <div class="controls">
+      <label>Venue
+        <select id="venue">
+          <option value="">All</option>
+          <option value="pons">Pons</option>
+          <option value="flap">Flap</option>
+        </select>
+      </label>
+      <label>Min progress
+        <input id="min-progress" type="number" min="0" max="100" value="0">
+      </label>
+      <label class="check">
+        <input id="clean-first" type="checkbox">
+        Clean first
+      </label>
+    </div>
+  </header>
+  <main>
+    <section id="feed" aria-label="Curves"></section>
+    <section id="detail" aria-live="polite">
+      <p id="empty-detail" class="empty">Select a curve to read its progress, holders, and the creator's survival.</p>
+      <section id="progress-panel" class="panel" hidden></section>
+      <section id="safety-panel" class="panel" hidden></section>
+      <section id="holder-panel" class="panel" hidden></section>
+      <section id="creator-panel" class="panel" hidden></section>
+    </section>
+  </main>
+  <script>
+    const explorer = "https://robinhoodchain.blockscout.com";
+    const feed = document.querySelector("#feed");
+    const venue = document.querySelector("#venue");
+    const minProgress = document.querySelector("#min-progress");
+    const cleanFirst = document.querySelector("#clean-first");
+    const panels = ["progress-panel", "safety-panel", "holder-panel", "creator-panel"];
+    let selected = "";
+
+    function short(value) {
+      if (!value || value.length < 12) return value || "";
+      return value.slice(0, 6) + "…" + value.slice(-4);
+    }
+    function pct(value, digits) {
+      if (value == null || Number.isNaN(Number(value))) return "—";
+      return (Number(value) * 100).toFixed(digits == null ? 1 : digits) + "%";
+    }
+    function safetyClass(score) {
+      if (score >= 80) return "high";
+      if (score >= 60) return "mid";
+      return "low";
+    }
+    function el(tag, props, kids) {
+      const node = document.createElement(tag);
+      Object.entries(props || {}).forEach(([key, value]) => {
+        if (value == null) return;
+        if (key === "className") node.className = value;
+        else if (key === "text") node.textContent = String(value);
+        else node.setAttribute(key, String(value));
+      });
+      (kids || []).forEach((kid) => node.append(kid));
+      return node;
+    }
+    function clear(node) {
+      while (node.firstChild) node.removeChild(node.firstChild);
+    }
+    function addressLink(address) {
+      return el("a", { href: explorer + "/address/" + address, text: short(address), target: "_blank", rel: "noreferrer" });
+    }
+
+    function renderFeed(tokens) {
+      clear(feed);
+      if (!tokens.length) {
+        feed.append(el("p", { className: "empty", text: "No curves indexed yet." }));
+        return;
+      }
+      tokens.forEach((token) => {
+        const fill = el("div", { className: "fill" });
+        fill.style.width = Math.max(0, Math.min(100, token.progress * 100)) + "%";
+        const button = el("button", {
+          className: "token",
+          type: "button",
+          "data-token": token.token,
+          "aria-current": token.token === selected ? "true" : "false",
+        }, [
+          el("div", { className: "token-top" }, [
+            el("span", { className: "symbol", text: token.symbol || short(token.token) }),
+            el("span", { className: "safety " + safetyClass(token.safety), text: Number(token.safety).toFixed(0) }),
+          ]),
+          el("div", { className: "meta" }, [
+            el("span", { className: "venue " + token.venue, text: token.venue }),
+            el("span", { text: pct(token.progress) + " · " + token.uniqueBuyers + " buyers" }),
+          ]),
+          el("div", { className: "track" }, [fill]),
+        ]);
+        button.addEventListener("click", () => openToken(token.token));
+        feed.append(button);
+      });
+    }
+
+    function bar(label, value, max) {
+      const width = max <= 0 ? 0 : Math.max(0, Math.min(100, (value / max) * 100));
+      const fill = el("div", { className: "fill" });
+      fill.style.width = width + "%";
+      return el("div", { className: "bar-row" }, [
+        el("span", { text: label }),
+        el("div", { className: "track" }, [fill]),
+        el("span", { text: Number(value).toFixed(1) }),
+      ]);
+    }
+
+    function renderDetail(detail) {
+      document.querySelector("#empty-detail").hidden = true;
+      panels.forEach((id) => { document.querySelector("#" + id).hidden = false; });
+      const progress = document.querySelector("#progress-panel");
+      clear(progress);
+      const fill = el("div", { className: "fill" });
+      fill.style.width = Math.max(0, Math.min(100, detail.progress * 100)) + "%";
+      progress.append(
+        el("div", { className: "row" }, [
+          el("h2", { text: (detail.symbol || "Token") + " · " + (detail.name || detail.venue) }),
+          el("span", { className: "venue " + detail.venue, text: detail.venue }),
+        ]),
+        el("p", { id: "progress-line", text: "progress " + pct(detail.progress) + (detail.graduated ? " · graduated" : " · on the curve") }),
+        el("div", { className: "track" }, [fill]),
+        el("p", { className: "muted", text: detail.uniqueBuyers + " unique buyers · " + (detail.curve || detail.pool || detail.token) }),
+        el("p", {}, [
+          el("a", { href: explorer + "/token/" + detail.token, text: "Blockscout", target: "_blank", rel: "noreferrer" }),
+        ]),
+      );
+
+      const safety = document.querySelector("#safety-panel");
+      clear(safety);
+      const breakdown = detail.safetyBreakdown || {};
+      safety.append(
+        el("div", { className: "row" }, [
+          el("h2", { text: "Safety" }),
+          el("span", { className: "safety " + safetyClass(detail.safety), text: Number(detail.safety).toFixed(1) }),
+        ]),
+        el("div", { className: "bars" }, [
+          bar("top 10", breakdown.top10 || 0, 40),
+          bar("buyers", breakdown.buyers || 0, 20),
+          bar("creator", breakdown.creator || 0, 25),
+          bar("tax", breakdown.tax || 0, 10),
+          bar("lp", breakdown.lp || 0, 15),
+        ]),
+        el("p", { className: "muted", text: "Cuts come off a score of 100. Tax and unlocked LP apply to Flap only." }),
+      );
+
+      const holders = document.querySelector("#holder-panel");
+      clear(holders);
+      holders.append(
+        el("h2", { text: "Holders" }),
+        el("p", { className: "muted", text: "top 10 " + pct(detail.top10Share) + " of circulating, excluding the curve or portal, the pool or locker, and burn" }),
+      );
+      (detail.holders || []).slice(0, 10).forEach((holder) => {
+        const holderFill = el("div", { className: "fill safe" });
+        holderFill.style.width = Math.max(0, Math.min(100, holder.share * 100)) + "%";
+        holders.append(el("div", { className: "holder" }, [
+          addressLink(holder.account),
+          el("div", { className: "track" }, [holderFill]),
+          el("span", { text: pct(holder.share) }),
+        ]));
+      });
+      if (!(detail.holders || []).length) holders.append(el("p", { className: "empty", text: "No holder balances yet." }));
+
+      const creator = document.querySelector("#creator-panel");
+      clear(creator);
+      const history = detail.creatorStats || {};
+      const day = detail.checkpoints && detail.checkpoints["24h"];
+      const week = detail.checkpoints && detail.checkpoints["7d"];
+      const windowLine = (label, checkpoint) => {
+        if (!checkpoint) return label + " pending";
+        return label + " " + (checkpoint.survived ? "survived" : "failed") + " · liquidity " + (checkpoint.liquidityStayed ? "stayed" : "left");
+      };
+      creator.append(
+        el("h2", { text: "Creator" }),
+        addressLink(history.address || detail.creator),
+        el("p", {
+          id: "survival-line",
+          text: "graduation " + pct(history.graduationRate, 0) + " · 24h survival " + pct(history.survival24h, 0) + " · 7d survival " + pct(history.survival7d, 0),
+        }),
+        el("p", { className: "muted", text: (history.launches || 0) + " launches · " + (history.graduations || 0) + " graduated" }),
+        el("p", { className: "muted", text: windowLine("24h", day) + " · " + windowLine("7d", week) }),
+        el("p", { className: "muted", text: detail.creatorSold ? "Creator sold after graduation." : "No creator sale recorded." }),
+        el("p", { className: "muted", text: detail.liquidityUsd == null ? "Liquidity not quoted yet." : "Liquidity $" + Number(detail.liquidityUsd).toFixed(0) }),
+      );
+    }
+
+    async function loadFeed() {
+      const params = new URLSearchParams();
+      if (venue.value) params.set("venue", venue.value);
+      const minimum = Number(minProgress.value);
+      if (Number.isFinite(minimum) && minimum > 0) params.set("minProgress", String(minimum > 1 ? minimum / 100 : minimum));
+      if (cleanFirst.checked) params.set("sort", "clean");
+      const response = await fetch("/api/radar?" + params.toString());
+      const payload = await response.json();
+      renderFeed(payload.tokens || []);
+    }
+
+    async function openToken(token) {
+      selected = token;
+      document.querySelectorAll("[data-token]").forEach((node) => {
+        node.setAttribute("aria-current", node.getAttribute("data-token") === token ? "true" : "false");
+      });
+      const response = await fetch("/api/tokens/" + token);
+      if (!response.ok) return;
+      const payload = await response.json();
+      renderDetail(payload.token);
+    }
+
+    venue.addEventListener("change", () => void loadFeed());
+    minProgress.addEventListener("change", () => void loadFeed());
+    cleanFirst.addEventListener("change", () => void loadFeed());
+    void loadFeed();
+    setInterval(() => void loadFeed(), 8000);
+  </script>
+</body>
+</html>
